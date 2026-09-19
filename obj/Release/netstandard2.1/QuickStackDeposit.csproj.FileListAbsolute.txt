@@ -1,0 +1,11 @@
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\bin\Release\netstandard2.1\QuickStackDeposit.deps.json
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\bin\Release\netstandard2.1\QuickStackDeposit.dll
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\bin\Release\netstandard2.1\QuickStackDeposit.pdb
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.csproj.AssemblyReference.cache
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.AssemblyInfoInputs.cache
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.AssemblyInfo.cs
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.csproj.CoreCompileInputs.cache
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.sourcelink.json
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.dll
+C:\Users\vesap\Documents\GitHub\QuickStackDeposit\obj\Release\netstandard2.1\QuickStackDeposit.pdb

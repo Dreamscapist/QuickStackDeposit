@@ -8,9 +8,9 @@ namespace QuickStackDeposit
     [BepInPlugin(PluginGUID, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string PluginGUID = "yourname.valheim.quickstackdeposit";
+        public const string PluginGUID = "dreamscapist.valheim.quickstackdeposit";
         public const string PluginName = "QuickStackDeposit";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.2";
 
         // ---- Config ----
         private static ConfigEntry<KeyboardShortcut> _depositKey;
