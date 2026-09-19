@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>QuickStackDeposit</AssemblyName>
+    <RootNamespace>QuickStackDeposit</RootNamespace>
+    <Configurations>Debug;Release</Configurations>
+
+    <!--
+      Point this at the folder that contains Valheim's managed DLLs
+      and the BepInEx core DLLs. With r2modman/Thunderstore Mod Manager
+      you can find this path by clicking the settings (cog) icon on your
+      Valheim profile -> "Browse profile folder". That folder itself
+      contains BepInEx\core (with 0Harmony.dll, BepInEx.dll) and you also
+      need the game's own Managed folder, e.g.:
+        Steam\steamapps\common\Valheim\valheim_Data\Managed
+      Both are referenced below via two MSBuild properties you can
+      override on the command line or just edit the defaults here.
+    -->
+    <ValheimManagedDir Condition="'$(ValheimManagedDir)' == ''">D:\Steam\steamapps\common\Valheim\valheim_Data\Managed</ValheimManagedDir>
+    <BepInExCoreDir Condition="'$(BepInExCoreDir)' == ''">C:\Users\vesap\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\DreamHeim2\BepInEx\core</BepInExCoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="assembly_valheim">
+      <HintPath>$(ValheimManagedDir)\assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_utils">
+      <HintPath>$(ValheimManagedDir)\assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ValheimManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ValheimManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ValheimManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ValheimManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
