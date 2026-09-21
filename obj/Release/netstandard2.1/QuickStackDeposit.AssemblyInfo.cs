@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("QuickStackDeposit")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+abee2e1bbccbe375ea200887e9ae849c02a1a195")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
 [assembly: System.Reflection.AssemblyProductAttribute("QuickStackDeposit")]
 [assembly: System.Reflection.AssemblyTitleAttribute("QuickStackDeposit")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

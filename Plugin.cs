@@ -1,6 +1,12 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
+using BepInEx.Logging;
 using UnityEngine;
 
 namespace QuickStackDeposit
@@ -10,28 +16,48 @@ namespace QuickStackDeposit
     {
         public const string PluginGUID = "dreamscapist.valheim.quickstackdeposit";
         public const string PluginName = "QuickStackDeposit";
-        public const string PluginVersion = "1.0.2";
+        public const string PluginVersion = "1.1.0";
 
         // ---- Config ----
         private static ConfigEntry<KeyboardShortcut> _depositKey;
+        private static ConfigEntry<KeyboardShortcut> _lockToggleKey;
         private static ConfigEntry<float> _depositRange;
         private static ConfigEntry<bool> _includeEquipped;
-
-        // Cached scan results, refreshed only when the inventory screen transitions closed -> open.
-        private static bool _wasInventoryOpen;
-        private static List<Container> _cachedNearbyContainers = new List<Container>();
 
         // Valheim's hotbar (slots reachable with number keys 1-8) is just the
         // top row of the inventory grid, y == 0. Anything in that row is left alone.
         private const int HotbarRow = 0;
 
+        // Locked slots are tracked by grid position, not by item, so a slot stays
+        // locked even if you empty it and put something else there. Persisted to
+        // disk per-character (keyed by Player.GetPlayerID()) so locks survive
+        // restarts. File lives next to the plugin's own config file.
+        private static readonly Dictionary<long, HashSet<Vector2i>> _allPlayerLocks = new Dictionary<long, HashSet<Vector2i>>();
+        private static string LocksFilePath => Path.Combine(Paths.ConfigPath, PluginGUID + ".locks.txt");
+
+        private static ManualLogSource _log;
+
+        private static ConfigEntry<bool> _clearLocksEntry;
+        private static ConfigEntry<bool> _debugLogging;
+
         private void Awake()
         {
+            _log = Logger;
+
+            LoadLocksFromDisk();
+
             _depositKey = Config.Bind(
                 "General",
                 "DepositKey",
                 new KeyboardShortcut(KeyCode.R),
                 "Key to press while your inventory screen is open to deposit matching items into nearby storages."
+            );
+
+            _lockToggleKey = Config.Bind(
+                "General",
+                "LockToggleKey",
+                new KeyboardShortcut(KeyCode.X),
+                "Key to press while hovering over an inventory slot to lock/unlock it. Locked slots are never deposited."
             );
 
             _depositRange = Config.Bind(
@@ -51,7 +77,130 @@ namespace QuickStackDeposit
                 "If true, currently equipped items (weapons, armor, etc.) can also be deposited. Off by default so you don't accidentally strip your gear."
             );
 
-            Logger.LogInfo($"{PluginName} {PluginVersion} loaded. Deposit key: {_depositKey.Value}, range: {_depositRange.Value}");
+            _debugLogging = Config.Bind(
+                "Debug",
+                "EnableDebugLogging",
+                false,
+                "If true, logs detailed diagnostic messages (slot resolution, deposit decisions) to the BepInEx console/log. Off by default to keep the console clean."
+            );
+
+            // Adds a real button in BepInEx Configuration Manager (if installed) via
+            // its "custom drawer" convention - this only needs a locally-defined
+            // class with a matching name/field, not a compile-time reference to the
+            // Configuration Manager assembly. The underlying bool value is unused;
+            // it's just a hook for the button widget. Without Configuration Manager
+            // installed this entry simply sits unused in the .cfg file.
+            _clearLocksEntry = Config.Bind(
+                "Locking",
+                "ClearAllLocks",
+                false,
+                new ConfigDescription(
+                    "Button (in Configuration Manager): unlocks every locked slot for your current character.",
+                    null,
+                    new ConfigurationManagerAttributes { CustomDrawer = ClearLocksButtonDrawer }
+                )
+            );
+
+            Logger.LogInfo($"{PluginName} {PluginVersion} loaded. Deposit key: {_depositKey.Value}, lock key: {_lockToggleKey.Value}, range: {_depositRange.Value}");
+        }
+
+        // Duck-typed on purpose: BepInEx.ConfigurationManager looks for tag objects
+        // by type NAME, not by assembly identity, so this local class works without
+        // referencing that mod's assembly at all (and degrades harmlessly if the
+        // player doesn't have Configuration Manager installed).
+        private class ConfigurationManagerAttributes
+        {
+            public Action<ConfigEntryBase> CustomDrawer;
+        }
+
+        private static void ClearLocksButtonDrawer(ConfigEntryBase entry)
+        {
+            if (GUILayout.Button("Clear all locked slots for current character"))
+            {
+                ClearLocksForCurrentPlayer();
+            }
+        }
+
+        private static void ClearLocksForCurrentPlayer()
+        {
+            if (Player.m_localPlayer == null)
+            {
+                DebugLog("[Locks] Clear requested but no character is loaded right now.");
+                return;
+            }
+
+            HashSet<Vector2i> set = GetLockedSlotsForPlayer(Player.m_localPlayer);
+            int count = set.Count;
+            set.Clear();
+            SaveLocksToDisk();
+
+            DebugLog($"[Locks] Cleared {count} locked slot(s) for current character.");
+            Player.m_localPlayer.Message(MessageHud.MessageType.Center, $"Cleared {count} locked slot(s)");
+        }
+
+        private static HashSet<Vector2i> GetLockedSlotsForPlayer(Player player)
+        {
+            long id = player.GetPlayerID();
+            if (!_allPlayerLocks.TryGetValue(id, out HashSet<Vector2i> set))
+            {
+                set = new HashSet<Vector2i>();
+                _allPlayerLocks[id] = set;
+            }
+            return set;
+        }
+
+        private static void LoadLocksFromDisk()
+        {
+            _allPlayerLocks.Clear();
+            try
+            {
+                if (!File.Exists(LocksFilePath)) return;
+
+                foreach (string line in File.ReadAllLines(LocksFilePath))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+
+                    string[] parts = line.Split('|');
+                    if (parts.Length != 2) continue;
+                    if (!long.TryParse(parts[0], out long playerId)) continue;
+
+                    HashSet<Vector2i> set = new HashSet<Vector2i>();
+                    foreach (string posStr in parts[1].Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string[] xy = posStr.Split(',');
+                        if (xy.Length == 2 && int.TryParse(xy[0], out int x) && int.TryParse(xy[1], out int y))
+                        {
+                            set.Add(new Vector2i(x, y));
+                        }
+                    }
+                    _allPlayerLocks[playerId] = set;
+                }
+
+                DebugLog($"[Locks] Loaded locks for {_allPlayerLocks.Count} character(s) from disk.");
+            }
+            catch (Exception e)
+            {
+                _log?.LogWarning($"[Locks] Failed to load locks file: {e}");
+            }
+        }
+
+        private static void SaveLocksToDisk()
+        {
+            try
+            {
+                List<string> lines = new List<string>();
+                foreach (KeyValuePair<long, HashSet<Vector2i>> kvp in _allPlayerLocks)
+                {
+                    if (kvp.Value.Count == 0) continue;
+                    string posList = string.Join(";", kvp.Value.Select(p => $"{p.x},{p.y}"));
+                    lines.Add($"{kvp.Key}|{posList}");
+                }
+                File.WriteAllLines(LocksFilePath, lines);
+            }
+            catch (Exception e)
+            {
+                _log?.LogWarning($"[Locks] Failed to save locks file: {e}");
+            }
         }
 
         private void Update()
@@ -59,23 +208,213 @@ namespace QuickStackDeposit
             if (Player.m_localPlayer == null) return;
 
             bool isInventoryOpen = InventoryGui.instance != null && InventoryGui.IsVisible();
-
-            // Inventory just opened this frame -> scan for nearby storages once and cache them.
-            if (isInventoryOpen && !_wasInventoryOpen)
-            {
-                _cachedNearbyContainers = FindNearbyContainers(Player.m_localPlayer, _depositRange.Value);
-            }
-
-            _wasInventoryOpen = isInventoryOpen;
-
             if (!isInventoryOpen) return;
             if (Chat.instance != null && Chat.instance.HasFocus()) return;
             if (Console.IsVisible()) return;
 
+            if (_lockToggleKey.Value.IsDown())
+            {
+                ToggleLockOnHoveredSlot(Player.m_localPlayer);
+            }
+
             if (_depositKey.Value.IsDown())
             {
-                DepositNearbyMatchingItems(Player.m_localPlayer, _cachedNearbyContainers);
+                List<Container> containers = FindNearbyContainers(Player.m_localPlayer, _depositRange.Value);
+                DepositNearbyMatchingItems(Player.m_localPlayer, containers);
             }
+        }
+
+        private void ToggleLockOnHoveredSlot(Player player)
+        {
+            Vector2i? pos = FindHoveredSlotPos(player);
+            if (pos == null)
+            {
+                DebugLog($"[LockToggle] No slot resolved under mouse at {Input.mousePosition}.");
+                return;
+            }
+
+            HashSet<Vector2i> lockedSlots = GetLockedSlotsForPlayer(player);
+
+            bool nowLocked;
+            if (lockedSlots.Contains(pos.Value))
+            {
+                lockedSlots.Remove(pos.Value);
+                nowLocked = false;
+            }
+            else
+            {
+                lockedSlots.Add(pos.Value);
+                nowLocked = true;
+            }
+
+            SaveLocksToDisk();
+
+            DebugLog($"[LockToggle] {(nowLocked ? "Locking" : "Unlocking")} slot {pos.Value}. Currently locked slots: {string.Join(", ", lockedSlots)}");
+
+            player.Message(MessageHud.MessageType.Center, nowLocked ? "Inventory slot locked" : "Inventory slot unlocked");
+        }
+
+        // Rather than guess at InventoryGrid's internal layout (which produced
+        // unreliable results - see version history), this uses Unity's own UI
+        // event system to raycast at the mouse position, exactly like the game
+        // itself does to know what's under the cursor. It's resolved entirely via
+        // reflection so it doesn't need a compile-time reference to UnityEngine.UI -
+        // the types are already loaded at runtime since the game's whole UI depends
+        // on them. From the hit GameObject, it walks up the parent chain looking for
+        // any component field that directly holds a Vector2i grid position (works
+        // for empty slots too), falling back to an ItemData field's own position.
+        private static Vector2i? FindHoveredSlotPos(Player player)
+        {
+            GameObject hit = RaycastTopmostUIElement(Input.mousePosition);
+            if (hit == null)
+            {
+                DebugLog("[LockToggle] UI raycast found nothing under the mouse.");
+                return null;
+            }
+
+            DebugLog($"[LockToggle] UI raycast hit: '{GetHierarchyPath(hit.transform)}'");
+
+            Transform t = hit.transform;
+            int depth = 0;
+            while (t != null && depth < 12)
+            {
+                foreach (Component comp in t.GetComponents<Component>())
+                {
+                    if (comp == null) continue;
+
+                    Vector2i? pos = FindVector2iField(comp);
+                    if (pos.HasValue)
+                    {
+                        DebugLog($"[LockToggle] Found Vector2i {pos.Value} on {comp.GetType().Name} at '{t.name}' (depth {depth}).");
+                        return pos;
+                    }
+
+                    ItemDrop.ItemData directItem = FindItemDataField(comp);
+                    if (directItem != null)
+                    {
+                        DebugLog($"[LockToggle] Found ItemData field on {comp.GetType().Name} at '{t.name}' (depth {depth}): '{directItem.m_shared.m_name}' at {directItem.m_gridPos}.");
+                        return directItem.m_gridPos;
+                    }
+                }
+
+                t = t.parent;
+                depth++;
+            }
+
+            DebugLog("[LockToggle] Walked up the hit hierarchy but found no ItemData/Vector2i field on any component.");
+            return null;
+        }
+
+        private static GameObject RaycastTopmostUIElement(Vector2 screenPos)
+        {
+            Type eventSystemType = FindRuntimeType("UnityEngine.EventSystems.EventSystem");
+            Type pointerEventDataType = FindRuntimeType("UnityEngine.EventSystems.PointerEventData");
+            Type raycastResultType = FindRuntimeType("UnityEngine.EventSystems.RaycastResult");
+            if (eventSystemType == null || pointerEventDataType == null || raycastResultType == null)
+            {
+                DebugLog("[LockToggle] Could not find UnityEngine.EventSystems types at runtime.");
+                return null;
+            }
+
+            object current = eventSystemType.GetProperty("current", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+            if (current == null)
+            {
+                DebugLog("[LockToggle] EventSystem.current is null.");
+                return null;
+            }
+
+            object pointerData = Activator.CreateInstance(pointerEventDataType, current);
+            pointerEventDataType.GetProperty("position")?.SetValue(pointerData, screenPos);
+
+            Type listType = typeof(List<>).MakeGenericType(raycastResultType);
+            object resultsList = Activator.CreateInstance(listType);
+
+            MethodInfo raycastAllMethod = eventSystemType.GetMethod("RaycastAll", new[] { pointerEventDataType, listType });
+            if (raycastAllMethod == null)
+            {
+                DebugLog("[LockToggle] EventSystem.RaycastAll method not found.");
+                return null;
+            }
+
+            raycastAllMethod.Invoke(current, new object[] { pointerData, resultsList });
+
+            IList results = (IList)resultsList;
+            if (results.Count == 0) return null;
+
+            PropertyInfo goProp = raycastResultType.GetProperty("gameObject");
+            return goProp?.GetValue(results[0]) as GameObject;
+        }
+
+        private static Type FindRuntimeType(string fullName)
+        {
+            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = SafeGet(() => asm.GetType(fullName)) as Type;
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        private static string GetHierarchyPath(Transform t)
+        {
+            List<string> names = new List<string>();
+            while (t != null)
+            {
+                names.Add(t.name);
+                t = t.parent;
+            }
+            names.Reverse();
+            return string.Join("/", names);
+        }
+
+
+        private static ItemDrop.ItemData FindItemDataField(object element)
+        {
+            Type type = element.GetType();
+            foreach (FieldInfo field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (field.FieldType == typeof(ItemDrop.ItemData))
+                {
+                    return SafeGet(() => field.GetValue(element)) as ItemDrop.ItemData;
+                }
+            }
+            return null;
+        }
+
+        private static Vector2i? FindVector2iField(object element)
+        {
+            Type type = element.GetType();
+            foreach (FieldInfo field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (field.FieldType == typeof(Vector2i))
+                {
+                    object value = SafeGet(() => field.GetValue(element));
+                    if (value != null) return (Vector2i)value;
+                }
+            }
+            return null;
+        }
+
+        private static object SafeGet(Func<object> getter)
+        {
+            try { return getter(); }
+            catch { return null; }
+        }
+
+        // Gated behind EnableDebugLogging (off by default) so the console/log
+        // stays quiet during normal play; flip it on in Configuration Manager
+        // (or the .cfg file) when diagnosing slot-resolution issues.
+        private static void DebugLog(string message)
+        {
+            if (_debugLogging != null && _debugLogging.Value)
+            {
+                _log.LogInfo(message);
+            }
+        }
+
+        private static bool IsSlotLocked(Player player, Vector2i pos)
+        {
+            return GetLockedSlotsForPlayer(player).Contains(pos);
         }
 
         private void DepositNearbyMatchingItems(Player player, List<Container> containers)
@@ -100,6 +439,11 @@ namespace QuickStackDeposit
                 if (item == null) continue;
                 if (item.m_equipped && !_includeEquipped.Value) continue;
                 if (item.m_gridPos.y == HotbarRow) continue;
+                if (IsSlotLocked(player, item.m_gridPos))
+                {
+                    DebugLog($"[Deposit] Skipping item '{item.m_shared.m_name}' - slot {item.m_gridPos} is locked.");
+                    continue;
+                }
 
                 foreach (Container container in containers)
                 {
@@ -123,6 +467,7 @@ namespace QuickStackDeposit
                     if (moved)
                     {
                         stacksMoved++;
+                        DebugLog($"[Deposit] Moved '{item.m_shared.m_name}' (was at {item.m_gridPos}) into a nearby storage.");
                     }
 
                     // If the whole stack is already gone from the player, no need to check other containers for it.

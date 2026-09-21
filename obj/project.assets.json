@@ -13,11 +13,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\vesap\\Documents\\GitHub\\QuickStackDeposit\\QuickStackDeposit.csproj",
+      "projectUniqueName": "C:\\Users\\vesap\\Downloads\\QuickStackDeposit (9)\\QuickStackDeposit\\QuickStackDeposit\\QuickStackDeposit.csproj",
       "projectName": "QuickStackDeposit",
-      "projectPath": "C:\\Users\\vesap\\Documents\\GitHub\\QuickStackDeposit\\QuickStackDeposit.csproj",
+      "projectPath": "C:\\Users\\vesap\\Downloads\\QuickStackDeposit (9)\\QuickStackDeposit\\QuickStackDeposit\\QuickStackDeposit.csproj",
       "packagesPath": "C:\\Users\\vesap\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\vesap\\Documents\\GitHub\\QuickStackDeposit\\obj\\",
+      "outputPath": "C:\\Users\\vesap\\Downloads\\QuickStackDeposit (9)\\QuickStackDeposit\\QuickStackDeposit\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\vesap\\AppData\\Roaming\\NuGet\\NuGet.Config"
