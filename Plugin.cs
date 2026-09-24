@@ -16,7 +16,7 @@ namespace QuickStackDeposit
     {
         public const string PluginGUID = "dreamscapist.valheim.quickstackdeposit";
         public const string PluginName = "QuickStackDeposit";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.1.2";
 
         // ---- Config ----
         private static ConfigEntry<KeyboardShortcut> _depositKey;
@@ -39,6 +39,10 @@ namespace QuickStackDeposit
 
         private static ConfigEntry<bool> _clearLocksEntry;
         private static ConfigEntry<bool> _debugLogging;
+
+        // Tracks the inventory open/closed transition so lock-border UI elements
+        // are (re)built exactly once per open, and cleaned up once per close.
+        private static bool _wasInventoryOpenForOverlay;
 
         private void Awake()
         {
@@ -133,6 +137,7 @@ namespace QuickStackDeposit
             int count = set.Count;
             set.Clear();
             SaveLocksToDisk();
+            RebuildLockBorders(Player.m_localPlayer);
 
             DebugLog($"[Locks] Cleared {count} locked slot(s) for current character.");
             Player.m_localPlayer.Message(MessageHud.MessageType.Center, $"Cleared {count} locked slot(s)");
@@ -205,9 +210,34 @@ namespace QuickStackDeposit
 
         private void Update()
         {
-            if (Player.m_localPlayer == null) return;
+            if (Player.m_localPlayer == null)
+            {
+                if (_wasInventoryOpenForOverlay)
+                {
+                    ClearLockBorders();
+                    _wasInventoryOpenForOverlay = false;
+                    _pendingBorderRebuild = false;
+                }
+                return;
+            }
 
             bool isInventoryOpen = InventoryGui.instance != null && InventoryGui.IsVisible();
+
+            if (isInventoryOpen && !_wasInventoryOpenForOverlay)
+            {
+                // Don't rebuild right here: our Update() can run before Valheim's own
+                // script populates the grid's slot GameObjects for this frame. Defer
+                // to LateUpdate, which always runs after every other script's Update
+                // in the same frame.
+                _pendingBorderRebuild = true;
+            }
+            else if (!isInventoryOpen && _wasInventoryOpenForOverlay)
+            {
+                ClearLockBorders();
+                _pendingBorderRebuild = false;
+            }
+            _wasInventoryOpenForOverlay = isInventoryOpen;
+
             if (!isInventoryOpen) return;
             if (Chat.instance != null && Chat.instance.HasFocus()) return;
             if (Console.IsVisible()) return;
@@ -221,6 +251,148 @@ namespace QuickStackDeposit
             {
                 List<Container> containers = FindNearbyContainers(Player.m_localPlayer, _depositRange.Value);
                 DepositNearbyMatchingItems(Player.m_localPlayer, containers);
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (Player.m_localPlayer == null) return;
+
+            if (_pendingBorderRebuild)
+            {
+                RebuildLockBorders(Player.m_localPlayer);
+                _pendingBorderRebuild = false;
+
+                // Safety net: if the grid's slot elements genuinely weren't populated
+                // yet even by LateUpdate (e.g. deferred a full frame), and we had
+                // locks to show but found nothing to attach them to, try once more
+                // shortly after instead of silently giving up for the whole session.
+                if (_activeLockBorders.Count == 0 && GetLockedSlotsForPlayer(Player.m_localPlayer).Count > 0)
+                {
+                    _borderRetryAt = Time.unscaledTime + 0.3f;
+                    _borderRetryPending = true;
+                }
+            }
+            else if (_borderRetryPending && Time.unscaledTime >= _borderRetryAt)
+            {
+                _borderRetryPending = false;
+                if (InventoryGui.instance != null && InventoryGui.IsVisible())
+                {
+                    RebuildLockBorders(Player.m_localPlayer);
+                }
+            }
+        }
+
+        // Instead of drawing an OnGUI overlay (which always renders on top of every
+        // Canvas-based window, including popups like the split-stack dialog opened
+        // later), this parents real UI elements directly onto each locked slot's own
+        // RectTransform. That makes them ordinary children of the game's own UI
+        // hierarchy, so anything opened afterward covers them normally instead of
+        // the border punching through on top of it.
+        private static readonly List<GameObject> _activeLockBorders = new List<GameObject>();
+        private static Type _uiImageType;
+        private static Type UIImageType => _uiImageType ?? (_uiImageType = FindRuntimeType("UnityEngine.UI.Image"));
+        private static bool _pendingBorderRebuild;
+        private static bool _borderRetryPending;
+        private static float _borderRetryAt;
+
+        private static void ClearLockBorders()
+        {
+            foreach (GameObject go in _activeLockBorders)
+            {
+                if (go != null) UnityEngine.Object.Destroy(go);
+            }
+            _activeLockBorders.Clear();
+        }
+
+        private static void RebuildLockBorders(Player player)
+        {
+            ClearLockBorders();
+
+            if (UIImageType == null)
+            {
+                DebugLog("[Overlay] UnityEngine.UI.Image type not found at runtime; cannot draw slot borders.");
+                return;
+            }
+
+            HashSet<Vector2i> lockedSlots = GetLockedSlotsForPlayer(player);
+            if (lockedSlots.Count == 0) return;
+
+            List<(Vector2i pos, RectTransform rect)> slots = FindAllSlotRects();
+            foreach ((Vector2i pos, RectTransform rect) in slots)
+            {
+                if (rect == null || !lockedSlots.Contains(pos)) continue;
+                CreateBorderOn(rect);
+            }
+
+            DebugLog($"[Overlay] Built borders for {lockedSlots.Count} locked slot(s) ({_activeLockBorders.Count} bar objects).");
+        }
+
+        private const float BorderThickness = 3f;
+
+        private static void CreateBorderOn(RectTransform parent)
+        {
+            Color color = Color.gray;
+            CreateBorderBar(parent, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(0, BorderThickness), color); // top
+            CreateBorderBar(parent, new Vector2(0, 0), new Vector2(1, 0), new Vector2(0.5f, 0), new Vector2(0, BorderThickness), color); // bottom
+            CreateBorderBar(parent, new Vector2(0, 0), new Vector2(0, 1), new Vector2(0, 0.5f), new Vector2(BorderThickness, 0), color); // left
+            CreateBorderBar(parent, new Vector2(1, 0), new Vector2(1, 1), new Vector2(1, 0.5f), new Vector2(BorderThickness, 0), color); // right
+        }
+
+        private static void CreateBorderBar(RectTransform parent, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Vector2 sizeDelta, Color color)
+        {
+            GameObject go = new GameObject("QSD_LockBorder", typeof(RectTransform), UIImageType);
+            go.transform.SetParent(parent, false);
+
+            RectTransform rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = anchorMin;
+            rt.anchorMax = anchorMax;
+            rt.pivot = pivot;
+            rt.sizeDelta = sizeDelta;
+            rt.anchoredPosition = Vector2.zero;
+
+            Component image = go.GetComponent(UIImageType);
+            UIImageType.GetProperty("color")?.SetValue(image, color);
+            UIImageType.GetProperty("raycastTarget")?.SetValue(image, false);
+
+            _activeLockBorders.Add(go);
+        }
+
+        // Walks the player's inventory grid hierarchy looking for the same kind of
+        // per-slot Vector2i field used for hover/lock resolution, but for every slot
+        // at once instead of just the one under the mouse.
+        private static List<(Vector2i pos, RectTransform rect)> FindAllSlotRects()
+        {
+            List<(Vector2i, RectTransform)> results = new List<(Vector2i, RectTransform)>();
+
+            InventoryGrid grid = InventoryGui.instance != null ? InventoryGui.instance.m_playerGrid : null;
+            if (grid == null) return results;
+
+            HashSet<Vector2i> seen = new HashSet<Vector2i>();
+            CollectSlotRectsRecursive(grid.transform, results, seen, 0);
+
+            DebugLog($"[Overlay] Found {results.Count} slot rects under player grid.");
+            return results;
+        }
+
+        private static void CollectSlotRectsRecursive(Transform t, List<(Vector2i, RectTransform)> results, HashSet<Vector2i> seen, int depth)
+        {
+            if (t == null || depth > 10) return;
+
+            foreach (Component comp in t.GetComponents<Component>())
+            {
+                if (comp == null) continue;
+
+                Vector2i? pos = FindVector2iField(comp);
+                if (pos.HasValue && seen.Add(pos.Value) && t is RectTransform rt)
+                {
+                    results.Add((pos.Value, rt));
+                }
+            }
+
+            for (int i = 0; i < t.childCount; i++)
+            {
+                CollectSlotRectsRecursive(t.GetChild(i), results, seen, depth + 1);
             }
         }
 
@@ -248,6 +420,7 @@ namespace QuickStackDeposit
             }
 
             SaveLocksToDisk();
+            RebuildLockBorders(player);
 
             DebugLog($"[LockToggle] {(nowLocked ? "Locking" : "Unlocking")} slot {pos.Value}. Currently locked slots: {string.Join(", ", lockedSlots)}");
 
