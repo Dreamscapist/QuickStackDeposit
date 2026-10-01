@@ -16,7 +16,7 @@ namespace QuickStackDeposit
     {
         public const string PluginGUID = "dreamscapist.valheim.quickstackdeposit";
         public const string PluginName = "QuickStackDeposit";
-        public const string PluginVersion = "1.1.2";
+        public const string PluginVersion = "1.1.3";
 
         // ---- Config ----
         private static ConfigEntry<KeyboardShortcut> _depositKey;
